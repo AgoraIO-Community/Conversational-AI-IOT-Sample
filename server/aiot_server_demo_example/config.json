@@ -1,0 +1,48 @@
+{
+    "app_id": "YOUR_AGORA_APP_ID",
+    "app_certificate": "YOUR_AGORA_APP_CERTIFICATE",
+    "customer_key": "YOUR_CUSTOMER_KEY",
+    "customer_secret": "YOUR_CUSTOMER_SECRET",
+    "asr": {
+        "language": "zh-CN"
+    },
+    "parameters": {
+        "output_audio_codec": "G722",
+        "enable_dump": true,
+        "agent_rtc_sdk_params": "{\"che.audio.acm_ptime\": 20}",
+        "transcript": {
+            "enable": false,
+            "redundant": false,
+            "enable_words": false
+        },
+        "audio3a_downstream": {
+            "interleaved_reverse_stream": false,
+            "passthrough": false,
+            "enable_aec": false,
+            "enable_agc": false,
+            "enable_ans": false
+        }
+    },
+    "tts": {
+        "vendor": "YOUR_TTS_VENDOR",
+        "params": {
+        }
+    },
+    "idle_timeout": 30,
+    "llm": {
+        "url": "YOUR_LLM_API_URL",
+        "params": {
+            "model": "YOUR_LLM_MODEL"
+        },
+        "api_key": "YOUR_LLM_API_KEY",
+        "system_messages": [
+            {
+                "role": "system",
+                "content": "You are a helpful chatbot."
+            }
+        ],
+        "max_history": 10,
+        "greeting_message": "Hello, I'm your AI assistant. How can I help you?",
+        "failure_message": "Sorry, I am unable to answer your question at the moment. Please try asking another question or contact customer support."
+    }
+}
