@@ -55,7 +55,7 @@ Create a `config.json` file with the following structure and explanations:
   
   // System parameters configuration
   "parameters": {
-    "output_audio_codec": "PCMA"  // RTC streaming audio codec format, supported formats: "PCMU" "PCMA" "G722" "OPUS" "OPUSFB"
+    "output_audio_codec": "G722"  // RTC streaming audio codec format, supported formats: "PCMU" "PCMA" "G722" "OPUS" "OPUSFB"
     "transcript": {               // Subtitle feature parameter configuration
       "enable": false             // Disable subtitle feature
     }
