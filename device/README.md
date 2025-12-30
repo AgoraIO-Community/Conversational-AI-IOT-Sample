@@ -325,6 +325,6 @@ Reference documentation: https://doc.shengwang.cn/doc/convoai/restful/get-starte
 1. The development board will automatically start after inserting the battery or data cable.
 2. If you haven't set the WiFi account and password for the development board, please long press `S1` for 5 seconds to enter network provisioning mode.
 3. Use the companion APP (this demo only provides Android project, please build and install the APK yourself)
-4. After successful network provisioning, you can say `hi, Armino` to wake up the device and start a conversation with the AI Agent.
-5. After the conversation, you can say `bye bye, Armino` to exit the conversation with the AI Agent.
+4. After successful network provisioning, short press `S2` to wake up the device and start a conversation with the AI Agent.
+5. After the conversation, short press `S2` to exit the conversation with the AI Agent.
 6. The development board will automatically enter deep sleep mode after 3 minutes of idle state. You can restart it using the `RST` button.
