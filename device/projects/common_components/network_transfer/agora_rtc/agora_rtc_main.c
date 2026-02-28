@@ -62,7 +62,7 @@ static agora_rtc_config_t agora_rtc_config = DEFAULT_AGORA_RTC_CONFIG();
 static agora_rtc_option_t agora_rtc_option = DEFAULT_AGORA_RTC_OPTION();
 char agora_channel_name[AGORA_CONVOAI_CHANNEL_NAME_SIZE] = {0};
 static agora_convoai_configs_resp_t *convoai_configs = NULL;
-static agora_convoai_start_resp_t *convoai_start_resp = NULL;
+static bool convoai_started = false;
 static beken2_timer_t agora_convoai_start_countdown_ms_timer = { 0 };
 
 static uint32_t g_target_bps = BANDWIDTH_ESTIMATE_MIN_BITRATE;
@@ -332,9 +332,22 @@ void agora_main(void *args)
         memory_free_show();
     }
 
+    uint32_t ping_counter = 0;
     while (agora_runing)
     {
-        rtos_delay_milliseconds(5000);
+        rtos_delay_milliseconds(1000);
+        
+        if (convoai_started) {
+            // Call agora_convoai_ping every 10 seconds
+            if (0 == ping_counter) {
+                agora_convoai_ping(agora_channel_name);
+            }
+            if (ping_counter++ >= 10)
+            {
+                ping_counter = 0;
+            }
+        }
+
         //memory_free_show();
         //rtos_dump_task_runtime_stats();
     }
@@ -648,7 +661,7 @@ int agora_convoai_engine_load_config()
 void agora_convoai_engine_start()
 {
     /* Check if already started, exit directly if duplicate start */
-    if (convoai_start_resp) {
+    if (convoai_started) {
         LOGI("convoai has already started. refresh timer then return.\n");
         __convoai_timer_start_or_relaunch();
         return;
@@ -689,11 +702,12 @@ void agora_convoai_engine_start()
     os_memcpy(convoai_start_param.channel_name, agora_channel_name, sizeof(convoai_start_param.channel_name));
     convoai_start_param.local_uid = AGORA_CONVOAI_LOCAL_UID;
     convoai_start_param.agent_uid = AGORA_CONVOAI_AGENT_UID;
-    if (NULL == (convoai_start_resp = agora_convoai_start(&convoai_start_param))) {
+    if (0 != agora_convoai_start(&convoai_start_param)) {
         LOGE("convoai start failed.\n");
         return;
     }
-    LOGI("convoai start succcess. conversation_id=%s\n", convoai_start_resp->conversation_id);
+    convoai_started = true;
+    LOGI("convoai start success.\n");
 
     /* Start timer */
     __convoai_timer_start_or_relaunch();
@@ -705,17 +719,14 @@ void agora_convoai_engine_stop()
     agora_stop();
 
     /* Check if already started, exit directly if not started */
-    if (NULL == convoai_start_resp) {
+    if (!convoai_started) {
         LOGI("convoai has not started. just return\n");
         return;
     }
 
     /* Exit convoai server */
-    agora_convoai_stop_param_t convoai_stop_param;
-    os_memcpy(convoai_stop_param.conversation_id, convoai_start_resp->conversation_id, sizeof(convoai_stop_param.conversation_id));
-    agora_convoai_stop(&convoai_stop_param);
-    psram_free(convoai_start_resp);
-    convoai_start_resp = NULL;
+    agora_convoai_stop(agora_channel_name);
+    convoai_started = false;
     LOGI("convoai stop success.\n");
 
     /* Cancel timer */
@@ -732,7 +743,7 @@ void agora_convoai_engine_stop()
 #if 0
 static void agora_test_start()
 {
-    agora_convoai_start_resp_t *resp;
+    int ret;
     agora_convoai_start_param_t param;
 
     LOGI("%s%d\n", __FUNCTION__, __LINE__);
@@ -740,20 +751,14 @@ static void agora_test_start()
     snprintf(param.channel_name, sizeof(param.channel_name), "%s", "benchmark");
     param.local_uid = 1;
     param.agent_uid = 11;
-    resp = agora_convoai_start(&param);
-    if (resp) {
-        psram_free(resp);
-    }
+    ret = agora_convoai_start(&param);
+    LOGI("agora_convoai_start ret=%d\n", ret);
 }
 
 static void agora_test_stop()
 {
-    agora_convoai_stop_param_t param;
-
     LOGI("%s%d\n", __FUNCTION__, __LINE__);
-
-    snprintf(param.conversation_id, sizeof(param.conversation_id), "%s", "01234567890");
-    agora_convoai_stop(&param);
+    agora_convoai_stop(agora_channel_name);
 }
 
 static void agora_test_ota()

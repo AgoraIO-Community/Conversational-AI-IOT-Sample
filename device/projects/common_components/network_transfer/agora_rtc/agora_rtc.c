@@ -401,7 +401,7 @@ static int32_t __agora_init(agora_rtc_config_t *p_config)
     service_opt.area_code = p_config->area_code;
     service_opt.log_cfg.log_disable = false;
     service_opt.log_cfg.log_path = DEFAULT_SDK_LOG_PATH;
-    service_opt.log_cfg.log_level = RTC_LOG_NOTICE;
+    service_opt.log_cfg.log_level = RTC_LOG_WARNING;
     service_opt.log_cfg.log_printf = printf;
     os_memcpy(service_opt.license_value, p_config->license, 33);
 

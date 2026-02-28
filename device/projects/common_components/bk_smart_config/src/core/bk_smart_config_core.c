@@ -39,6 +39,8 @@
 #include "mbedtls/platform.h"
 #endif
 
+#include "agora_config.h"
+
 #define TAG "bk_sconf_core"
 bool smart_config_running = false;
 static beken2_timer_t network_reconnect_tmr = {0};
@@ -151,6 +153,11 @@ int demo_network_auto_reconnect(bool val)	//val true means from disconnect to re
 	BK_FAST_CONNECT_D info = {0};
 
 	bk_config_read("d_network_id", (void *)&info, sizeof(BK_FAST_CONNECT_D));
+#ifdef WIFI_SSID
+    strncpy((char *)info.sta_ssid, WIFI_SSID, sizeof(info.sta_ssid) - 1);
+    strncpy((char *)info.sta_pwd, WIFI_PWD, sizeof(info.sta_pwd) - 1);
+    info.flag |= 0x71l;
+#endif
 	/*0x01110001:sta, 0x01110010:softap, 0x01110100:pan*/
 	if ((info.flag & 0x71l) == 0x71l) {
 		if (val == false) {
