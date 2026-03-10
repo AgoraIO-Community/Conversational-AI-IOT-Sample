@@ -12,7 +12,7 @@ extern "C" {
 //#define CONFIG_UVC_CAMERA  /* config CONFIG_USB_UVC in cp1 */
 //#define CONFIG_DVP_CAMERA
 
-#define SPK_GAIN_MAX     (0X28)
+#define SPK_GAIN_MAX     (0X3A)
 #define SPK_VOLUME_LEVEL (11) //[0,10]
 
 #define BANDWIDTH_ESTIMATE_MIN_BITRATE   (500000)
