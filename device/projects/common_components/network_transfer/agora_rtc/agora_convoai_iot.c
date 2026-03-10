@@ -73,20 +73,7 @@ static void __get_convoai_ota_result_report_url(char url[AGORA_CONVOAI_SERVER_UR
 static int __https_get_request(const char *request_url, char *resp_buffer, int resp_buffer_len)
 {
   struct webclient_session* session = NULL;
-  char *convoai_request_token = NULL;
   int err = -1, bytes_read;
-
-  if (NULL == (convoai_request_token = psram_malloc(AGORA_CONVOAI_REQUEST_TOKEN_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
-
-  os_memset(convoai_request_token, 0, AGORA_CONVOAI_REQUEST_TOKEN_SIZE);
-  agora_convoai_request_token_persistence_read(convoai_request_token);
-  if (convoai_request_token[0] == '\0') {
-    LOGE("convoai_request_token invalid.");
-    goto L_EXIT;
-  }
 
   if (NULL == (session = webclient_session_create(HTTP_RSP_BODY_SIZE))) {
     LOGE("webclient session create failed.");
@@ -94,9 +81,7 @@ static int __https_get_request(const char *request_url, char *resp_buffer, int r
   }
 
   LOGI("web get URL=%s", request_url);
-  LOGI("web token=%s", convoai_request_token);
   webclient_header_fields_add(session, "Content-Type: application/json\r\n");
-  webclient_header_fields_add(session, "Authorization: Bearer %s\r\n", convoai_request_token);
 
   err = webclient_get(session, request_url);
   LOGI("webclient get err=%d", err);
@@ -118,31 +103,13 @@ L_EXIT:
     session = NULL;
   }
 
-  if (convoai_request_token) {
-    psram_free(convoai_request_token);
-    convoai_request_token = NULL;
-  }
-
   return err == 200 ? 0 : -1;
 }
 
 static int __https_post_request(const char *request_url, const char *post_body, int post_body_len, char *resp_buffer, int resp_buffer_len)
 {
   struct webclient_session* session = NULL;
-  char *convoai_request_token = NULL;
   int err = -1, bytes_read;
-
-  if (NULL == (convoai_request_token = psram_malloc(AGORA_CONVOAI_REQUEST_TOKEN_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
-
-  os_memset(convoai_request_token, 0, AGORA_CONVOAI_REQUEST_TOKEN_SIZE);
-  agora_convoai_request_token_persistence_read(convoai_request_token);
-  if (convoai_request_token[0] == '\0') {
-    LOGE("convoai_request_token invalid.");
-    goto L_EXIT;
-  }
 
   if (NULL == (session = webclient_session_create(HTTP_RSP_BODY_SIZE))) {
     LOGE("webclient session create failed.");
@@ -151,10 +118,8 @@ static int __https_post_request(const char *request_url, const char *post_body, 
 
   LOGI("web post URL=%s", request_url);
   LOGI("web post body=%s", post_body);
-  LOGI("web token=%s", convoai_request_token);
   webclient_header_fields_add(session, "Content-Length: %d\r\n", post_body_len);
   webclient_header_fields_add(session, "Content-Type: application/json\r\n");
-  webclient_header_fields_add(session, "Authorization: Bearer %s\r\n", convoai_request_token);
   err = webclient_post(session, request_url, post_body, post_body_len);
   LOGI("webclient post err=%d", err);
   if (err != 200) {
@@ -173,11 +138,6 @@ L_EXIT:
   if (session) {
     webclient_close(session);
     session = NULL;
-  }
-
-  if (convoai_request_token) {
-    psram_free(convoai_request_token);
-    convoai_request_token = NULL;
   }
 
   return err == 200 ? 0 : -1;
