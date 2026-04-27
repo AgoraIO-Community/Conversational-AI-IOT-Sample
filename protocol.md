@@ -115,7 +115,10 @@ Request body:
 {
   "channelName": "device-001-session",
   "rtcUid": 58888506,
-  "userUid": 4321
+  "userUid": 4321,
+  "parameters": {
+    "output_audio_codec": "g722"
+  }
 }
 ```
 
@@ -126,13 +129,14 @@ Fields:
 | `channelName` | string | yes | The `channel_name` returned by `/get_config`. |
 | `rtcUid` | integer | yes | The numeric `agent_uid` returned by `/get_config`. This is the agent's RTC UID. |
 | `userUid` | integer | yes | The numeric `uid` returned by `/get_config`. This is the IoT device's RTC UID. |
+| `parameters.output_audio_codec` | string | yes | Output audio codec requested by this device flow. Use `g722`. |
 
 Example:
 
 ```bash
 curl -X POST "http://localhost:8000/v2/startAgent" \
   -H "Content-Type: application/json" \
-  -d '{"channelName":"device-001-session","rtcUid":58888506,"userUid":4321}'
+  -d '{"channelName":"device-001-session","rtcUid":58888506,"userUid":4321,"parameters":{"output_audio_codec":"g722"}}'
 ```
 
 Success response:

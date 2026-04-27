@@ -1,6 +1,7 @@
 #include <os/os.h>
 #include <os/mem.h>
 #include <os/str.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "components/webclient.h"
@@ -32,28 +33,59 @@ static void __get_convoai_config_url(char url[AGORA_CONVOAI_SERVER_URL_SIZE])
 {
   agora_convoai_server_url_read(url);
   int len = strlen(url);
-  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/token/generate");
+  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/get_config");
 }
 
 static void __get_convoai_start_url(char url[AGORA_CONVOAI_SERVER_URL_SIZE])
 {
   agora_convoai_server_url_read(url);
   int len = strlen(url);
-  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/start");
+  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/v2/startAgent");
 }
 
 static void __get_convoai_stop_url(char url[AGORA_CONVOAI_SERVER_URL_SIZE])
 {
   agora_convoai_server_url_read(url);
   int len = strlen(url);
-  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/stop");
+  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/v2/stopAgent");
 }
 
-static void __get_convoai_ping_url(char url[AGORA_CONVOAI_SERVER_URL_SIZE])
+static bool __json_code_is_success(cJSON *root)
 {
-  agora_convoai_server_url_read(url);
-  int len = strlen(url);
-  snprintf(url + len, AGORA_CONVOAI_SERVER_URL_SIZE - len, "%s", "/ping");
+  cJSON *code = cJSON_GetObjectItem(root, "code");
+  if (!code) {
+    return false;
+  }
+
+  if ((code->type & 0xFF) == cJSON_Number) {
+    return code->valueint == 0;
+  }
+
+  if ((code->type & 0xFF) == cJSON_String) {
+    return 0 == strcmp(code->valuestring, "0");
+  }
+
+  return false;
+}
+
+static int __json_get_uid(cJSON *obj, const char *name, int *uid)
+{
+  cJSON *item = cJSON_GetObjectItem(obj, name);
+  if (!item || !uid) {
+    return -1;
+  }
+
+  if ((item->type & 0xFF) == cJSON_Number) {
+    *uid = item->valueint;
+    return 0;
+  }
+
+  if ((item->type & 0xFF) == cJSON_String) {
+    *uid = atoi(item->valuestring);
+    return 0;
+  }
+
+  return -1;
 }
 
 static void __get_convoai_ota_get_url(char url[AGORA_CONVOAI_SERVER_URL_SIZE])
@@ -90,7 +122,7 @@ static int __https_get_request(const char *request_url, char *resp_buffer, int r
   }
 
   do {
-    bytes_read = webclient_read(session, resp_buffer, resp_buffer_len);
+    bytes_read = webclient_read(session, resp_buffer, resp_buffer_len - 1);
     if (bytes_read > 0) {
       resp_buffer[bytes_read] = '\0';
       break;
@@ -127,7 +159,7 @@ static int __https_post_request(const char *request_url, const char *post_body, 
   }
 
   do {
-    bytes_read = webclient_read(session, resp_buffer, resp_buffer_len);
+    bytes_read = webclient_read(session, resp_buffer, resp_buffer_len - 1);
     if (bytes_read > 0) {
       resp_buffer[bytes_read] = '\0';
       break;
@@ -145,18 +177,12 @@ L_EXIT:
 
 agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_param_t *config_param)
 {
-  int len, err = -1;
-  char *request_body = NULL;
+  int err = -1;
   char *resp_body = NULL;
   char *request_url = NULL;
-  cJSON *root = NULL, *code = NULL, *msg = NULL, *data = NULL, *app_id = NULL, *token = NULL;
+  cJSON *root = NULL, *msg = NULL, *data = NULL, *app_id = NULL, *token = NULL, *channel_name = NULL;
   agora_convoai_configs_resp_t *config = NULL;
   int try_cnt = 2;
-
-  if (NULL == (request_body = psram_malloc(HTTP_REQ_BODY_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
 
   if (NULL == (resp_body = psram_malloc(HTTP_RSP_BODY_SIZE))) {
     LOGE("alloc memory failed.");
@@ -169,18 +195,18 @@ agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_pa
   }
 
   __get_convoai_config_url(request_url);
-  
-  // Build request JSON: {"request_id": "xxx", "uid": xxx, "channel_name": "xxx"}
-  char request_id[AGORA_CONVOAI_REQUEST_ID_SIZE] = {0};
-  os_snprintf(request_id, sizeof(request_id), "%llu", rtos_get_time());
-  len = os_snprintf(request_body, HTTP_REQ_BODY_SIZE, 
-                    "{\"request_id\": \"%s\", \"uid\": %d, \"channel_name\": \"%s\"}",
-                    request_id,
-                    config_param->local_uid,
-                    config_param->channel_name);
+
+  if (config_param && config_param->channel_name[0] != '\0' && 0 != strcmp(config_param->channel_name, "*")) {
+    int url_len = strlen(request_url);
+    os_snprintf(request_url + url_len,
+                AGORA_CONVOAI_SERVER_URL_SIZE - url_len,
+                "?channel=%s&uid=%d",
+                config_param->channel_name,
+                config_param->local_uid);
+  }
 
   while (--try_cnt >= 0) {
-    err = __https_post_request(request_url, request_body, len, resp_body, HTTP_RSP_BODY_SIZE);
+    err = __https_get_request(request_url, resp_body, HTTP_RSP_BODY_SIZE);
     if (err >= 0) break;
   }
 
@@ -197,17 +223,6 @@ agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_pa
     goto L_EXIT;
   }
 
-  // Parse response: {"code": "0", "data": {"appId": "xxx", "channel_name": "xxx", "token": "xxx", "uid": xxx}, "msg": "success"}
-  if (NULL == (code = cJSON_GetObjectItem(root, "code"))) {
-    LOGE("convoai config resp format invalid. code not found");
-    goto L_EXIT;
-  }
-
-  if ((code->type & 0xFF) != cJSON_String) {
-    LOGE("convoai config resp format invalid. code not string");
-    goto L_EXIT;
-  }
-
   if (NULL == (msg = cJSON_GetObjectItem(root, "msg"))) {
     LOGE("convoai config resp format invalid. msg not found");
   } else {
@@ -216,9 +231,8 @@ agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_pa
     }
   }
 
-  // Check if code is "0" and msg is "success"
-  if (strcmp(code->valuestring, "0") != 0) {
-    LOGE("convoai config resp failed. code=%s", code->valuestring);
+  if (!__json_code_is_success(root)) {
+    LOGE("convoai config resp failed. code invalid");
     goto L_EXIT;
   }
 
@@ -233,13 +247,13 @@ agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_pa
     goto L_EXIT;
   }
 
-  if (NULL == (app_id = cJSON_GetObjectItem(data, "appId"))) {
-    LOGE("convoai config resp format invalid. appId not found");
+  if (NULL == (app_id = cJSON_GetObjectItem(data, "app_id"))) {
+    LOGE("convoai config resp format invalid. app_id not found");
     goto L_EXIT;
   }
 
   if ((app_id->type & 0xFF) != cJSON_String) {
-    LOGE("convoai config resp format invalid. appId not string");
+    LOGE("convoai config resp format invalid. app_id not string");
     goto L_EXIT;
   }
 
@@ -253,23 +267,44 @@ agora_convoai_configs_resp_t* agora_convoai_configs_get(agora_convoai_configs_pa
     goto L_EXIT;
   }
 
+  if (NULL == (channel_name = cJSON_GetObjectItem(data, "channel_name"))) {
+    LOGE("convoai config resp format invalid. channel_name not found");
+    goto L_EXIT;
+  }
+
+  if ((channel_name->type & 0xFF) != cJSON_String) {
+    LOGE("convoai config resp format invalid. channel_name not string");
+    goto L_EXIT;
+  }
+
   if (NULL == (config = psram_malloc(sizeof(agora_convoai_configs_resp_t)))) {
     LOGE("alloc memory failed.");
     goto L_EXIT;
   }
+  os_memset(config, 0, sizeof(agora_convoai_configs_resp_t));
 
   os_snprintf(config->app_id, sizeof(config->app_id), "%s", app_id->valuestring);
   os_snprintf(config->rtc_token, sizeof(config->rtc_token), "%s", token->valuestring);
+  os_snprintf(config->channel_name, sizeof(config->channel_name), "%s", channel_name->valuestring);
+  if (0 != __json_get_uid(data, "uid", &config->local_uid)) {
+    LOGE("convoai config resp format invalid. uid invalid");
+    goto L_EXIT;
+  }
+  if (0 != __json_get_uid(data, "agent_uid", &config->agent_uid)) {
+    LOGE("convoai config resp format invalid. agent_uid invalid");
+    goto L_EXIT;
+  }
   config->token_enable = (config->rtc_token[0] != '\0' && 0 != strcmp(config->app_id, config->rtc_token));
   config->timestamp = rtos_get_time();
   err = 0;
 
-  LOGI("convoai get config success. appid=%s, token=%s, token_enable=%d, ts=%u", config->app_id, config->rtc_token, config->token_enable, config->timestamp);
+  LOGI("convoai get config success. appid=%s, channel=%s, uid=%d, agent_uid=%d, token_enable=%d, ts=%u",
+       config->app_id, config->channel_name, config->local_uid, config->agent_uid, config->token_enable, config->timestamp);
 
 L_EXIT:
-  if (request_body) {
-    psram_free(request_body);
-    request_body = NULL;
+  if (err != 0 && config) {
+    psram_free(config);
+    config = NULL;
   }
 
   if (resp_body) {
@@ -296,7 +331,7 @@ int agora_convoai_start(agora_convoai_start_param_t *start_param)
   char *request_body = NULL;
   char *resp_body = NULL;
   char *request_url = NULL;
-  cJSON *root = NULL, *code = NULL, *msg = NULL;
+  cJSON *root = NULL, *msg = NULL, *data = NULL, *agent_id = NULL;
   int try_cnt = 2;
 
   if (NULL == (request_body = psram_malloc(HTTP_REQ_BODY_SIZE))) {
@@ -315,41 +350,19 @@ int agora_convoai_start(agora_convoai_start_param_t *start_param)
   }
 
   __get_convoai_start_url(request_url);
-  
-  // Build request JSON: {"request_id": "xxx", "channel_name": "xxx", "user_uid": xxx, "graph_name": "xxx", "greeting": "xxx", "prompt": "xxx", "language": "xxx", "voice_type": "xxx", "properties": {...}}
-  char request_id[AGORA_CONVOAI_REQUEST_ID_SIZE] = {0};
-  os_snprintf(request_id, sizeof(request_id), "%llu", rtos_get_time());
-  
-  // Build the complete JSON with properties
+
   len = os_snprintf(request_body,
                     HTTP_REQ_BODY_SIZE, 
-                    "{\"request_id\": \"%s\", "
-                    "\"channel_name\": \"%s\", "
-                    "\"user_uid\": %d, "
-                    "\"graph_name\": \"%s\", "
-                    "\"greeting\": \"%s\", "
-                    "\"prompt\": \"%s\", "
-                    "\"language\": \"%s\", "
-                    "\"voice_type\": \"%s\", "
-                    "\"properties\": {"
-                      "\"llm\": {"
-                        "\"model\": \"%s\""
-                      "}, "
-                      "\"agora_rtc\": {"
-                        "\"sdk_params\": \"%s\""
-                      "}"
+                    "{\"channelName\": \"%s\", "
+                    "\"rtcUid\": %d, "
+                    "\"userUid\": %d, "
+                    "\"parameters\": {"
+                      "\"output_audio_codec\": \"g722\""
                     "}"
                     "}",
-                    request_id,
                     start_param->channel_name,
-                    start_param->local_uid,
-                    GRAPH_NAME,
-                    GREETING,
-                    AGORA_CONVOAI_PROMPT,
-                    LANGUAGE,
-                    VOICE_TYPE,
-                    TENAI_LLM_MODEL,
-                    TENAI_RTC_PARAMES);
+                    start_param->agent_uid,
+                    start_param->local_uid);
 
   while (--try_cnt >= 0) {
     err = __https_post_request(request_url, request_body, len, resp_body, HTTP_RSP_BODY_SIZE);
@@ -369,17 +382,6 @@ int agora_convoai_start(agora_convoai_start_param_t *start_param)
     goto L_EXIT;
   }
 
-  // Parse response: {"code": "0", "data": null, "msg": "success"}
-  if (NULL == (code = cJSON_GetObjectItem(root, "code"))) {
-    LOGE("convoai start resp format invalid. code not found");
-    goto L_EXIT;
-  }
-
-  if ((code->type & 0xFF) != cJSON_String) {
-    LOGE("convoai start resp format invalid. code not string");
-    goto L_EXIT;
-  }
-
   if (NULL == (msg = cJSON_GetObjectItem(root, "msg"))) {
     LOGE("convoai start resp format invalid. msg not found");
   } else {
@@ -388,14 +390,30 @@ int agora_convoai_start(agora_convoai_start_param_t *start_param)
     }
   }
 
-  // Check if code is "0" and msg is "success"
-  if (strcmp(code->valuestring, "0") != 0) {
-    LOGE("convoai start resp failed. code=%s", code->valuestring);
+  if (!__json_code_is_success(root)) {
+    LOGE("convoai start resp failed. code invalid");
     goto L_EXIT;
   }
 
+  if (NULL == (data = cJSON_GetObjectItem(root, "data")) || cJSON_IsNull(data)) {
+    LOGE("convoai start resp format invalid. data not found");
+    goto L_EXIT;
+  }
+
+  if (NULL == (agent_id = cJSON_GetObjectItem(data, "agent_id"))) {
+    LOGE("convoai start resp format invalid. agent_id not found");
+    goto L_EXIT;
+  }
+
+  if ((agent_id->type & 0xFF) != cJSON_String) {
+    LOGE("convoai start resp format invalid. agent_id not string");
+    goto L_EXIT;
+  }
+
+  os_snprintf(start_param->agent_id, sizeof(start_param->agent_id), "%s", agent_id->valuestring);
   err = 0;
-  LOGI("convoai start success. channel_name=%s, local_uid=%u", start_param->channel_name, start_param->local_uid);
+  LOGI("convoai start success. channel_name=%s, local_uid=%u, agent_uid=%u, agent_id=%s",
+       start_param->channel_name, start_param->local_uid, start_param->agent_uid, start_param->agent_id);
 
 L_EXIT:
   if (request_body) {
@@ -421,13 +439,13 @@ L_EXIT:
   return err;
 }
 
-int agora_convoai_stop(const char *channel_name)
+int agora_convoai_stop(const char *agent_id)
 {
   int len, err = -1;
   char *request_body = NULL;
   char *resp_body = NULL;
   char *request_url = NULL;
-  cJSON *root = NULL, *code = NULL, *msg = NULL;
+  cJSON *root = NULL, *msg = NULL;
   int try_cnt = 2;
 
   if (NULL == (request_body = psram_malloc(HTTP_REQ_BODY_SIZE))) {
@@ -447,13 +465,9 @@ int agora_convoai_stop(const char *channel_name)
 
   __get_convoai_stop_url(request_url);
   
-  // Build request JSON: {"request_id": "xxx", "channel_name": "xxx"}
-  char request_id[AGORA_CONVOAI_REQUEST_ID_SIZE] = {0};
-  os_snprintf(request_id, sizeof(request_id), "%llu", rtos_get_time());
   len = os_snprintf(request_body, HTTP_REQ_BODY_SIZE, 
-                    "{\"request_id\": \"%s\", \"channel_name\": \"%s\"}", 
-                    request_id,
-                    channel_name);
+                    "{\"agentId\": \"%s\"}",
+                    agent_id ? agent_id : "");
 
   while (--try_cnt >= 0) {
     err = __https_post_request(request_url, request_body, len, resp_body, HTTP_RSP_BODY_SIZE);
@@ -473,17 +487,6 @@ int agora_convoai_stop(const char *channel_name)
     goto L_EXIT;
   }
 
-  // Parse response: {"code": "0", "data": null, "msg": "success"}
-  if (NULL == (code = cJSON_GetObjectItem(root, "code"))) {
-    LOGE("convoai stop resp format invalid. code not found");
-    goto L_EXIT;
-  }
-
-  if ((code->type & 0xFF) != cJSON_String) {
-    LOGE("convoai stop resp format invalid. code not string");
-    goto L_EXIT;
-  }
-
   if (NULL == (msg = cJSON_GetObjectItem(root, "msg"))) {
     LOGE("convoai stop resp format invalid. msg not found");
   } else {
@@ -492,118 +495,12 @@ int agora_convoai_stop(const char *channel_name)
     }
   }
 
-  // Check if code is "0" and msg is "success"
-  if (strcmp(code->valuestring, "0") != 0) {
-    LOGE("convoai stop resp failed. code=%s", code->valuestring);
+  if (!__json_code_is_success(root)) {
+    LOGE("convoai stop resp failed. code invalid");
     goto L_EXIT;
   }
 
-  LOGI("convoai stop success.");
-
-  err = 0;
-L_EXIT:
-
-  if (request_body) {
-    psram_free(request_body);
-    request_body = NULL;
-  }
-
-  if (resp_body) {
-    psram_free(resp_body);
-    resp_body = NULL;
-  }
-
-  if (request_url) {
-    psram_free(request_url);
-    request_url = NULL;
-  }
-
-  if (root) {
-    cJSON_Delete(root);
-    root = NULL;
-  }
-
-  return err;
-}
-
-int agora_convoai_ping(const char *channel_name)
-{
-  int len, err = -1;
-  char *request_body = NULL;
-  char *resp_body = NULL;
-  char *request_url = NULL;
-  cJSON *root = NULL, *code = NULL, *msg = NULL;
-  int try_cnt = 2;
-
-  if (NULL == (request_body = psram_malloc(HTTP_REQ_BODY_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
-
-  if (NULL == (resp_body = psram_malloc(HTTP_RSP_BODY_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
-
-  if (NULL == (request_url = psram_malloc(AGORA_CONVOAI_SERVER_URL_SIZE))) {
-    LOGE("alloc memory failed.");
-    goto L_EXIT;
-  }
-
-  __get_convoai_ping_url(request_url);
-  
-  // Build request JSON: {"request_id": "xxx", "channel_name": "xxx"}
-  char request_id[AGORA_CONVOAI_REQUEST_ID_SIZE] = {0};
-  os_snprintf(request_id, sizeof(request_id), "%llu", rtos_get_time());
-  len = os_snprintf(request_body, HTTP_REQ_BODY_SIZE, 
-                    "{\"request_id\": \"%s\", \"channel_name\": \"%s\"}", 
-                    request_id,
-                    channel_name);
-
-  while (--try_cnt >= 0) {
-    err = __https_post_request(request_url, request_body, len, resp_body, HTTP_RSP_BODY_SIZE);
-    if (err >= 0) break;
-  }
-
-  if (err < 0) {
-    LOGE("convoai ping failed. err=%d", err);
-    goto L_EXIT;
-  }
-
-  LOGI("convoai ping resp=%s", resp_body);
-  err = -1;
-
-  if (NULL == (root = cJSON_Parse(resp_body))) {
-    LOGE("convoai ping resp format invalid. not json");
-    goto L_EXIT;
-  }
-
-  // Parse response: {"code": "0", "data": null, "msg": "success"}
-  if (NULL == (code = cJSON_GetObjectItem(root, "code"))) {
-    LOGE("convoai ping resp format invalid. code not found");
-    goto L_EXIT;
-  }
-
-  if ((code->type & 0xFF) != cJSON_String) {
-    LOGE("convoai ping resp format invalid. code not string");
-    goto L_EXIT;
-  }
-
-  if (NULL == (msg = cJSON_GetObjectItem(root, "msg"))) {
-    LOGE("convoai ping resp format invalid. msg not found");
-  } else {
-    if ((msg->type & 0xFF) == cJSON_String) {
-      LOGI("msg=%s", msg->valuestring);
-    }
-  }
-
-  // Check if code is "0" and msg is "success"
-  if (strcmp(code->valuestring, "0") != 0) {
-    LOGE("convoai ping resp failed. code=%s", code->valuestring);
-    goto L_EXIT;
-  }
-
-  LOGI("convoai ping success.");
+  LOGI("convoai stop success. agent_id=%s", agent_id ? agent_id : "");
 
   err = 0;
 L_EXIT:

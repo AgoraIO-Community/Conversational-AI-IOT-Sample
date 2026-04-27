@@ -63,6 +63,7 @@ static agora_rtc_option_t agora_rtc_option = DEFAULT_AGORA_RTC_OPTION();
 char agora_channel_name[AGORA_CONVOAI_CHANNEL_NAME_SIZE] = {0};
 static agora_convoai_configs_resp_t *convoai_configs = NULL;
 static bool convoai_started = false;
+static char convoai_agent_id[AGORA_CONVOAI_AGENT_ID_SIZE] = {0};
 static beken2_timer_t agora_convoai_start_countdown_ms_timer = { 0 };
 
 static uint32_t g_target_bps = BANDWIDTH_ESTIMATE_MIN_BITRATE;
@@ -272,7 +273,7 @@ void agora_main(void *args)
     agora_rtc_option.audio_config.pcm_channel_num = CONFIG_PCM_CHANNEL_NUM;
 #endif
     agora_rtc_option.p_token = ((configs->rtc_token[0] == '\0' || (0 == strcmp(configs->app_id, configs->rtc_token))) ? NULL : configs->rtc_token);
-    agora_rtc_option.uid = AGORA_CONVOAI_LOCAL_UID;
+    agora_rtc_option.uid = configs->local_uid;
     LOGI("appid=%s, token=%s\n", agora_rtc_config.p_appid, NULL == agora_rtc_option.p_token ? "NULL" : agora_rtc_option.p_token);
 
     ret = bk_agora_rtc_start(&agora_rtc_option);
@@ -332,22 +333,9 @@ void agora_main(void *args)
         memory_free_show();
     }
 
-    uint32_t ping_counter = 0;
     while (agora_runing)
     {
         rtos_delay_milliseconds(1000);
-        
-        if (convoai_started) {
-            // Call agora_convoai_ping every 10 seconds
-            if (0 == ping_counter) {
-                agora_convoai_ping(agora_channel_name);
-            }
-            if (ping_counter++ >= 10)
-            {
-                ping_counter = 0;
-            }
-        }
-
         //memory_free_show();
         //rtos_dump_task_runtime_stats();
     }
@@ -654,7 +642,8 @@ int agora_convoai_engine_load_config()
         return -1;
     }
 
-    LOGI("convoai get config success. appid=%s, rtc_token=%s\n", convoai_configs->app_id, convoai_configs->rtc_token);
+    LOGI("convoai get config success. appid=%s, channel=%s, uid=%d, agent_uid=%d, rtc_token=%s\n",
+         convoai_configs->app_id, convoai_configs->channel_name, convoai_configs->local_uid, convoai_configs->agent_uid, convoai_configs->rtc_token);
     return 0;
 }
 
@@ -677,12 +666,11 @@ void agora_convoai_engine_start()
     }
 
     /**
-     * If APPID has security token mode enabled, need to check if token has expired, assuming token validity is 12 hours
-     * Trick here: set channel name to wildcard * when getting token, to solve the issue of needing to update token every time due to global channel name consistency
+     * Server tokens are valid for one hour; refresh before starting a session if the cached token is stale.
      */
     if (convoai_configs->token_enable) {
         uint32_t now = rtos_get_time();
-        #define TOKEN_TIMEOUS_MSEC (12UL * 60 * 60 * 1000)
+        #define TOKEN_TIMEOUS_MSEC (55UL * 60 * 1000)
         uint32_t elapsed = (now >= convoai_configs->timestamp) ? (now - convoai_configs->timestamp) : (UINT32_MAX - convoai_configs->timestamp + now);
         if (elapsed >= TOKEN_TIMEOUS_MSEC) {
             LOGI("convoai token expired. reload configs\n");
@@ -693,19 +681,37 @@ void agora_convoai_engine_start()
         }
     }
 
-    /* Start local rtsa */
-    agora_convoai_get_channel_name(agora_channel_name);
-    agora_start(convoai_configs);
+    /* Start local RTC with the server-provided session identity. */
+    snprintf(agora_channel_name, sizeof(agora_channel_name), "%s", convoai_configs->channel_name);
+    if (BK_OK != agora_start(convoai_configs)) {
+        LOGE("agora start failed.\n");
+        return;
+    }
+
+    uint32_t wait_join_ms = 0;
+    while (!g_connected_flag && wait_join_ms < 10000) {
+        rtos_delay_milliseconds(100);
+        wait_join_ms += 100;
+    }
+
+    if (!g_connected_flag) {
+        LOGE("rtc join timeout. stop local rtc before starting agent.\n");
+        agora_stop();
+        return;
+    }
 
     /* Start convoai server */
     agora_convoai_start_param_t convoai_start_param;
+    os_memset(&convoai_start_param, 0, sizeof(convoai_start_param));
     os_memcpy(convoai_start_param.channel_name, agora_channel_name, sizeof(convoai_start_param.channel_name));
-    convoai_start_param.local_uid = AGORA_CONVOAI_LOCAL_UID;
-    convoai_start_param.agent_uid = AGORA_CONVOAI_AGENT_UID;
+    convoai_start_param.local_uid = convoai_configs->local_uid;
+    convoai_start_param.agent_uid = convoai_configs->agent_uid;
     if (0 != agora_convoai_start(&convoai_start_param)) {
         LOGE("convoai start failed.\n");
+        agora_stop();
         return;
     }
+    os_snprintf(convoai_agent_id, sizeof(convoai_agent_id), "%s", convoai_start_param.agent_id);
     convoai_started = true;
     LOGI("convoai start success.\n");
 
@@ -715,19 +721,26 @@ void agora_convoai_engine_start()
 
 void agora_convoai_engine_stop()
 {
-    /* Exit rtsa */
-    agora_stop();
-
     /* Check if already started, exit directly if not started */
     if (!convoai_started) {
         LOGI("convoai has not started. just return\n");
+        agora_stop();
         return;
     }
 
-    /* Exit convoai server */
-    agora_convoai_stop(agora_channel_name);
+    /* Exit convoai server before leaving RTC. */
+    agora_convoai_stop(convoai_agent_id);
+    os_memset(convoai_agent_id, 0, sizeof(convoai_agent_id));
     convoai_started = false;
     LOGI("convoai stop success.\n");
+
+    /* Exit RTC. */
+    agora_stop();
+
+    if (convoai_configs) {
+        psram_free(convoai_configs);
+        convoai_configs = NULL;
+    }
 
     /* Cancel timer */
     if (rtos_is_oneshot_timer_running(&agora_convoai_start_countdown_ms_timer)) {
@@ -758,7 +771,7 @@ static void agora_test_start()
 static void agora_test_stop()
 {
     LOGI("%s%d\n", __FUNCTION__, __LINE__);
-    agora_convoai_stop(agora_channel_name);
+    agora_convoai_stop(convoai_agent_id);
 }
 
 static void agora_test_ota()
